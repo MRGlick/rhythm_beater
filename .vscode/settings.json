@@ -36,9 +36,16 @@
   "C_Cpp_Runner.enableWarnings": true,
   "C_Cpp_Runner.warningsAsError": false,
   "C_Cpp_Runner.compilerArgs": [],
-  "C_Cpp_Runner.linkerArgs": [],
+  "C_Cpp_Runner.linkerArgs": [
+    "-Lsdl_libs",
+    "-lSDL2main ",
+    "-lSDL2 ",
+    "-lSDL2_gpu ",
+    "-lSDL2_ttf"
+  ],
   "C_Cpp_Runner.includePaths": [
-    "libs"
+    "my_libs",
+    "sdl_include"
   ],
   "C_Cpp_Runner.includeSearch": [
     "*",
