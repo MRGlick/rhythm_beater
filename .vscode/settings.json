@@ -9,7 +9,6 @@
   "C_Cpp_Runner.warnings": [
     "-Wall",
     "-Wextra",
-    "-Wpedantic",
     "-Wshadow",
     "-Wformat=2",
     "-Wcast-align",
