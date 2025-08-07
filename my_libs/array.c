@@ -8,9 +8,9 @@
 #include <string.h>
 
 typedef struct ArrayHeader {
-    int size; 
-    int length;
-    int item_size;
+    size_t size; 
+    size_t length;
+    size_t item_size;
     int padding;
 } ArrayHeader;
 
@@ -18,7 +18,7 @@ ArrayHeader *array_header(const void *array) {
     return ((ArrayHeader *)array - 1);
 }
 
-void * _create_array(int item_size, int size) {
+void * _create_array(size_t item_size, size_t size) {
     void *m = malloc(item_size * size + sizeof(ArrayHeader));
 
     if (m == NULL) {

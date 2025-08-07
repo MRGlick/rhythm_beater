@@ -7,8 +7,6 @@
   "C_Cpp_Runner.msvcBatchPath": "C:/Program Files/Microsoft Visual Studio/VR_NR/Community/VC/Auxiliary/Build/vcvarsall.bat",
   "C_Cpp_Runner.useMsvc": false,
   "C_Cpp_Runner.warnings": [
-    "-Wall",
-    "-Wextra",
     "-Wshadow",
     "-Wformat=2",
     "-Wcast-align",
@@ -65,6 +63,15 @@
   "C_Cpp_Runner.useLinkTimeOptimization": false,
   "C_Cpp_Runner.msvcSecureNoWarnings": false,
   "files.associations": {
-    "stdlib.h": "c"
+    "stdlib.h": "c",
+    "type_traits": "c",
+    "stdio.h": "c",
+    "sdl_ttf.h": "c",
+    "sdl_gpu.h": "c",
+    "match.h": "c",
+    "array": "c",
+    "functional": "c",
+    "tuple": "c",
+    "utility": "c"
   }
 }

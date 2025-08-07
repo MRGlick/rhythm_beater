@@ -8,8 +8,8 @@
       "args": [],
       "stopAtEntry": false,
       "externalConsole": true,
-      "cwd": "c:/Users/Cyber_AI/Desktop/Projects/rhythm_beater",
-      "program": "c:/Users/Cyber_AI/Desktop/Projects/rhythm_beater/build/Debug/outDebug",
+      "cwd": "c:/Users/rahel/Desktop/VSCode/C/rhythm_beater",
+      "program": "c:/Users/rahel/Desktop/VSCode/C/rhythm_beater/build/Debug/outDebug",
       "MIMode": "gdb",
       "miDebuggerPath": "gdb",
       "setupCommands": [

@@ -1,4 +1,6 @@
 
+#pragma GCC diagnostic ignored "-Wsign-conversion"
+
 #define SDL_MAIN_HANDLED
 
 #include <SDL2/SDL.h>
@@ -7,11 +9,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
-#include "err_macros.c"
+#include "dbg_macros.c"
 #include "match.h"
 #include "inttypes.h"
 #include "array.c"
 #include "todo.c"
+#include "mark_unused.h"
 
 typedef struct Node {
     void (*render)(struct Node *, double);
@@ -34,10 +37,11 @@ typedef struct Comp {
     typedef struct { \
         Comp comp; \
         __VA_ARGS__ \
-    } Comp##name;
+    } Comp##name; \
+    Comp *Comp##name##_new();
+
 
 //  Do NOT use __COUNTER__ between COMP_TYPE_IDS_START and COMP_TYPE_IDS_END!!!
-
 const int COMP_TYPE_IDS_START = __COUNTER__;
 
 DEFINE_COMP(
@@ -50,16 +54,6 @@ DEFINE_COMP(
     int x, y, z;
 )
 
-DEFINE_COMP(
-    Baz, 
-    int x, y, z;
-)
-
-DEFINE_COMP(
-    Faz, 
-    int x, y, z;
-)
-
 const int COMP_TYPE_IDS_END = __COUNTER__;
 
 
@@ -67,9 +61,9 @@ typedef u16 comp_idx_t;
 
 typedef struct CompArray {
     int type_id;
-    int _id_to_idx_len;
+    size_t _id_to_idx_len;
     comp_idx_t *id_to_idx; // the more generally used name is the 'sparse array' but thats a stupid name
-    Comp *comps;
+    Comp **comps; // indirect so we can do inheritance
 } CompArray;
 
 typedef struct ECS {
@@ -91,19 +85,27 @@ ECS *_ecs = NULL;
 
 // #FUNCS
 
-#define Comp_new(type) ({type *comp = malloc(sizeof(type)); })
+static inline bool is_valid_id(int id);
 
-void ECS_add_comp(Comp *comp);
+Comp *CompArray_get(CompArray *comp_arr, int type_id, int id);
 
-void ECS_add(CompArray *comp_arr);
+int comp_arr_idx(int type_id);
+
+Node *get_root();
+
+void Node_add_child(Node *node, Node *child);
+
+void ECS_add_comp(Comp *comp, int id);
+
+void ECS_add_comp_arr(CompArray *comp_arr);
 
 void ECS_init(void);
 
 int Node_child_count(Node *node);
 
-Node *_Node_new(Comp *comps, int count);
+Node *_Node_new(Comp **comps, int count);
 
-#define Node_new(comp_arr_literal) ({Comp __arr[] = comp_arr_literal; _Node_new(__arr, sizeof(__arr) / sizeof(Comp)); })
+#define Node_new(...) ({Comp *__arr[] = __VA_ARGS__; _Node_new(__arr, sizeof(__arr) / sizeof(Comp)); })
 
 #define Node_new_empty() _Node_new(NULL, 0)
 
@@ -111,7 +113,7 @@ void Node_free(Node *node);
 
 void CompArray_expand_to_fit_id(CompArray *comp_array, int id);
 
-void CompArray_add_comp(CompArray *comp_arr, Comp *comp, int id);
+void CompArray_add(CompArray *comp_arr, Comp *comp, int id);
 
 void CompArray_free(CompArray *comp_arr);
 
@@ -212,19 +214,22 @@ bool is_key_pressed(SDL_Scancode scancode) {
     return SDL_GetKeyboardState(NULL)[scancode];
 }
 
-void tick(double delta) {
-    
-}
-
-void render(double delta) {
+// #TICK
+void tick(UNUSED double delta) {
 
 }
 
-int _max_id = 0;
+
+// #RENDER
+void render(UNUSED double delta) {
+
+}
+
+int _max_id = 0; // if an id is equal to or bigger than _max_id, it is invalid.
 
 int get_next_id(void) {
     static comp_idx_t _id = 1; // reserve 0
-    return _max_id = _id++;
+    return _max_id = _id++ + 1;
 }
 
 #define COMP_ARRAY_SPARSE_SIZE 100
@@ -235,7 +240,7 @@ CompArray *_CompArray_new(int type_id) {
         .type_id = type_id,
         .id_to_idx = calloc(sizeof(comp_idx_t), COMP_ARRAY_SPARSE_SIZE),
         ._id_to_idx_len = COMP_ARRAY_SPARSE_SIZE,
-        .comps = array(Comp, 4)
+        .comps = array(Comp *, 4)
     };
 
     return comp_arr;
@@ -249,20 +254,20 @@ void CompArray_free(CompArray *comp_arr) {
     free(comp_arr);
 }
 
-void CompArray_add_comp(CompArray *comp_arr, Comp *comp, int id) {
-    assert(id < _max_id);
+void CompArray_add(CompArray *comp_arr, Comp *comp, int id) {
+    assert(is_valid_id(id));
     CompArray_expand_to_fit_id(comp_arr, id);
     if (comp_arr->id_to_idx[id]) err_exit(
         "Can't add comp! id '%d' is already taken!", id
     );
-    array_append(comp_arr->comps, *comp);
-    comp_arr->id_to_idx[id] = array_length(comp_arr->comps) - 1;
+    array_append(comp_arr->comps, comp);
+    comp_arr->id_to_idx[id] = (comp_idx_t)(array_length(comp_arr->comps) - 1);
 }
 
 void CompArray_expand_to_fit_id(CompArray *comp_array, int id) {
     if (comp_array->_id_to_idx_len >= id) return;
 
-    int old_len = comp_array->_id_to_idx_len;
+    size_t old_len = comp_array->_id_to_idx_len;
 
     while (comp_array->_id_to_idx_len < id) comp_array->_id_to_idx_len *= 2;
 
@@ -276,7 +281,7 @@ void CompArray_expand_to_fit_id(CompArray *comp_array, int id) {
 }
 
 
-Node *_Node_new(Comp *comps, int count) {
+Node *_Node_new(Comp **comps, int count) {
     Node *node = malloc(sizeof(Node));
     *node = (Node) {
         .children = array(Node *, 2),
@@ -287,7 +292,7 @@ Node *_Node_new(Comp *comps, int count) {
     };
 
     for (int i = 0; i < count; i++) {
-        ECS_add_comp(&comps[i]);
+        ECS_add_comp(comps[i], node->id);
     }
 
     return node;
@@ -307,26 +312,70 @@ int Node_child_count(Node *node) {
 }
 
 void ECS_init(void) {
-    _ecs = malloc(sizeof(ECS));
+    _ecs = calloc(sizeof(ECS), 1);
     _ecs->comp_arrays = array(CompArray *, 2);
 
-    ECS_add(CompArray_new(CompFoo));
-    ECS_add(CompArray_new(CompBar));
-    ECS_add(CompArray_new(CompBaz));
-    ECS_add(CompArray_new(CompFaz));
+    ECS_add_comp_arr(CompArray_new(CompFoo));
+    ECS_add_comp_arr(CompArray_new(CompBar));
+
+    print_dbg("Initialized ECS!");
 }
 
-void ECS_add(CompArray *comp_arr) {
+void ECS_add_comp_arr(CompArray *comp_arr) {
     array_append(_ecs->comp_arrays, comp_arr);
 }
 
+// #START
 void start() {
     _root = Node_new_empty();
+    Node_add_child(_root, Node_new({(Comp*)CompFoo_new(1, 2, 3), (Comp*)CompBar_new(4, 5, 6)}));
+
+    CompFoo *c = ((CompFoo *)CompArray_get(_ecs->comp_arrays[0], CompFoo_type_id, 1));
+    assert(c->x == 1);
+    print_dbg("yay!");
     
 }
 
-void ECS_add_comp(Comp *comp) {
+void ECS_add_comp(Comp *comp, int id) {
+    CompArray *comp_arr = _ecs->comp_arrays[comp_arr_idx(comp)];
+    CompArray_add(comp_arr, comp, id);
+}
 
+void Node_add_child(Node *node, Node *child) {
+    array_append(node->children, child);
+}
+
+Node *get_root() {
+    return _root;
+}
+
+static inline int comp_arr_idx(int type_id) {
+    return type_id - COMP_TYPE_IDS_START - 1;
+}
+
+Comp *CompFoo_new(int x, int y, int z) {
+    CompFoo *f = malloc(sizeof(CompFoo));
+    f->x = x;
+    f->y = y;
+    f->z = z;
+    return f;
+}
+
+Comp *CompBar_new(int x, int y, int z) {
+    CompBar *b = malloc(sizeof(CompBar));
+    b->x = x;
+    b->y = y;
+    b->z = z;
+    return b;
+}
+
+Comp *ECS_get(CompArray *comp_arr, int comp_type_id, int id) {
+    assert(is_valid_id(id));
+    return _ecs->comp_arrays[comp_arr_idx(comp_type_id)]->comps[comp_arr->id_to_idx[id]];
+}
+
+static inline bool is_valid_id(int id) {
+    return id > 0 && id < _max_id;
 }
 
 // #END
