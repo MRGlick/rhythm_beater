@@ -15,6 +15,7 @@
 #include "array.c"
 #include "todo.c"
 #include "mark_unused.h"
+#include "move.c"
 
 typedef struct Node {
     void (*render)(struct Node *, double);
@@ -99,6 +100,10 @@ ECS *_ecs = NULL;
 
 // #FUNCS
 
+void ECS_remove_id(int id);
+
+void ECS_remove_comp(int id, Comp *comp);
+
 int Node_find_child(Node *parent, Node *child);
 
 void Node_remove_child(Node *parent, Node *child);
@@ -151,7 +156,9 @@ Node *_Node_new(Comp **comps, int count);
 
 #define Node_new_empty() _Node_new(NULL, 0)
 
-void Node_free(Node *node);
+void _Node_free(Node *node);
+
+#define Node_free(node) _Node_free(move(node))
 
 void CompArray_expand_to_fit_id(CompArray *comp_array, int id);
 
@@ -278,16 +285,20 @@ int get_next_id(void) {
 
 #define COMP_ARRAY_SPARSE_SIZE 100
 
+#define COMP_ARRAY_IDX_NONE -1
+
 CompArray *_CompArray_new(int type_id) {
     CompArray *comp_arr = malloc(sizeof(CompArray));
     *comp_arr = (CompArray){
         .type_id = type_id,
-        .id_to_idx = calloc(sizeof(comp_idx_t), COMP_ARRAY_SPARSE_SIZE),
+        .id_to_idx = malloc(sizeof(comp_idx_t) * COMP_ARRAY_SPARSE_SIZE),
         ._id_to_idx_len = COMP_ARRAY_SPARSE_SIZE,
         .comps = array(Comp *, 4)
     };
 
-    print_dbg("Called _CompArray_new()");
+    for (int i = 0; i < comp_arr->_id_to_idx_len; i++) {
+        comp_arr->id_to_idx[i] = COMP_ARRAY_IDX_NONE;
+    }
 
     return comp_arr;
 }
@@ -348,13 +359,13 @@ Node *_Node_new(Comp **comps, int count) {
     return node;
 }
 
-void Node_free(Node *node) {
+void _Node_free(Node *node) {
     for (int i = 0; i < Node_child_count(node); i++) {
-        Node_free(node->children[i]);
+        _Node_free(node->children[i]);
     }
     array_free(node->children);
     
-    print_todo("ECS component deletion when deleting a node");
+    
 }
 
 int Node_child_count(Node *node) {
@@ -442,6 +453,10 @@ Comp *CompArray_get(CompArray *comp_arr, int id) {
     assert(is_valid_id(id));
     assert(comp_arr);
 
+    int idx = comp_arr->id_to_idx[id];
+
+    if (idx == -1)
+
     return comp_arr->comps[comp_arr->id_to_idx[id]];
 }
 
@@ -499,6 +514,43 @@ int Node_find_child(Node *parent, Node *child) {
         if (Node_get_child(parent, i) == child) return i;
     }
     return -1;
+}
+
+void ECS_remove_comp(int id, Comp *comp) {
+    assert(is_valid_id(id));
+    assert(comp);
+    
+    CompArray *comp_arr = _ecs->comp_arrays[type_id_to_ecs_idx(comp->type_id)];
+    
+    // swap for O(1) removal
+    int idx = comp_arr->id_to_idx[id];
+
+    if (idx == COMP_ARRAY_IDX_NONE) {
+        print_dbg("Component with id=%d and type_id=%d (start=%d) doesn't exist! not removing.", id, comp->type_id, COMP_TYPE_IDS_START);
+        return;
+    }
+
+    int comp_count = array_length(comp_arr->comps);
+
+    int last_idx = comp_count - 1;
+    Comp *temp = comp_arr->comps[idx];
+    comp_arr->comps[idx] = comp_arr->comps[last_idx];
+    comp_arr->comps[last_idx] = temp;
+    comp_arr->id_to_idx[id] = 0;
+    for (int i = 0; i < comp_arr->_id_to_idx_len; i++) {
+        if (comp_arr->id_to_idx[i] == last_idx) {
+            comp_arr->id_to_idx[i] = idx;
+            break;
+        }
+    }
+
+    array_remove(comp_arr->comps, comp_count - 1);
+}
+
+void ECS_remove_id(int id) {
+    for (int i = COMP_TYPE_IDS_START + 1; i < COMP_TYPE_IDS_END; i++) {
+        ECS_remove_comp(id, CompArray_get(_ecs->comp_arrays[type_id_to_ecs_idx(i)], id));
+    }
 }
 
 // #END
