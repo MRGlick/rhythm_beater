@@ -42,7 +42,8 @@
   ],
   "C_Cpp_Runner.includePaths": [
     "my_libs",
-    "sdl_include"
+    "sdl_include",
+    "dlls"
   ],
   "C_Cpp_Runner.includeSearch": [
     "*",
