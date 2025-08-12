@@ -16,6 +16,7 @@
 #include "todo.c"
 #include "mark_unused.h"
 #include "move.c"
+#include "ring_buffer.c"
 
 typedef struct Node {
     void (*render)(struct Node *, double);
@@ -72,7 +73,7 @@ COMP_INIT(Bar, b, int x, int y, int z) {
 const int COMP_TYPE_IDS_END = __COUNTER__;
 
 
-typedef u16 comp_idx_t;
+typedef i16 comp_idx_t;
 
 typedef struct CompArray {
     int type_id;
@@ -89,6 +90,7 @@ typedef struct ECS {
 GPU_Target *screen = NULL;
 Node *_root = NULL;
 ECS *_ecs = NULL;
+RingBuffer *_free_ids = NULL;
 
 
 #define SDL_INIT_FLAGS SDL_INIT_AUDIO | SDL_INIT_VIDEO
@@ -99,6 +101,8 @@ ECS *_ecs = NULL;
 #define FPS 60
 
 // #FUNCS
+
+void reclaim_id(int id);
 
 void ECS_remove_id(int id);
 
@@ -277,6 +281,9 @@ void render(UNUSED double delta) {
 int _max_id = 0; // if an id is equal to or bigger than _max_id, it is invalid.
 
 int get_next_id(void) {
+
+    if (!RB_is_empty(_free_ids)) return RB_pop(int, _free_ids);
+
     static comp_idx_t _id = 1; // reserve 0
     int new_id = _id++;
     _max_id = new_id + 1;
@@ -314,7 +321,7 @@ void CompArray_free(CompArray *comp_arr) {
 void CompArray_add(CompArray *comp_arr, Comp *comp, int id) {
     assert(is_valid_id(id));
     CompArray_expand_to_fit_id(comp_arr, id);
-    if (comp_arr->id_to_idx[id]) err_exit(
+    if (comp_arr->id_to_idx[id] != COMP_ARRAY_IDX_NONE) err_crash(
         "Can't add comp! id '%d' is already taken!", id
     );
     array_append(comp_arr->comps, comp);
@@ -365,6 +372,9 @@ void _Node_free(Node *node) {
     }
     array_free(node->children);
     
+    ECS_remove_id(node->id);
+
+    free(node);
     
 }
 
@@ -380,6 +390,8 @@ void ECS_init(void) {
         array_append(_ecs->comp_arrays, _CompArray_new(type_id));
     }
 
+    _free_ids = RB_new(int, 256);
+
     print_dbg("Initialized ECS!");
 }
 
@@ -390,17 +402,33 @@ void ECS_add_comp_arr(CompArray *comp_arr) {
 // #START
 void start() {
     _root = Node_new_empty();
-    Node_add_child(_root, Node_new(Comp_new(Foo, 1, 2, 3), Comp_new(Bar, 4, 5, 6)));
-    Node_add_child(_root, Node_new(Comp_new(Foo, 1, 2, 3), Comp_new(Bar, 4, 5, 6)));
-    Node_add_child(_root, Node_new(Comp_new(Foo, 1, 2, 3), Comp_new(Bar, 4, 5, 6)));
-    Node_add_child(_root, Node_new(Comp_new(Foo, 1, 2, 3), Comp_new(Bar, 4, 5, 6)));
 
+    Node *node = Node_new(Comp_new(Foo, 1, 2, 3), Comp_new(Bar, 2, 4, 6));
 
+    Node_add_child(_root, node);
 
-    CompFoo *c = ECS_get_comp(_root->children[2], Foo);
+    Node_free(node);
+
+    node = Node_new(Comp_new(Foo, 1, 2, 3), Comp_new(Bar, 2, 4, 6));
+
+    Node_add_child(_root, node);
+
+    Node_free(node);
+
+    node = Node_new(Comp_new(Foo, 1, 2, 3), Comp_new(Bar, 2, 4, 6));
+
+    Node_add_child(_root, node);
+
+    Node_free(node);
+
+    node = Node_new(Comp_new(Foo, 1, 2, 3), Comp_new(Bar, 2, 4, 6));
+
+    Node_add_child(_root, node);
+
+    Node_free(node);
 
     CompArray_print_dbg(_ecs->comp_arrays[0]);
-    assert(c->x == 1);
+
     print_dbg("yay!");
     
 }
@@ -419,7 +447,10 @@ void Node_add_child(Node *node, Node *child) {
 
     array_append(node->children, child);
 
-    Node_remove_child(node, child);
+    if (child->parent) {
+        Node_remove_child(child->parent, child);
+    }
+    
     child->parent = node;
 }
 
@@ -455,7 +486,14 @@ Comp *CompArray_get(CompArray *comp_arr, int id) {
 
     int idx = comp_arr->id_to_idx[id];
 
-    if (idx == -1)
+    if (idx == COMP_ARRAY_IDX_NONE) {
+        err_exit(
+            "Component with id=%d, type_id=%d (start=%d) doesn't exist!",
+            id,
+            comp_arr->type_id,
+            COMP_TYPE_IDS_START
+        );
+    }
 
     return comp_arr->comps[comp_arr->id_to_idx[id]];
 }
@@ -523,7 +561,7 @@ void ECS_remove_comp(int id, Comp *comp) {
     CompArray *comp_arr = _ecs->comp_arrays[type_id_to_ecs_idx(comp->type_id)];
     
     // swap for O(1) removal
-    int idx = comp_arr->id_to_idx[id];
+    comp_idx_t idx = comp_arr->id_to_idx[id];
 
     if (idx == COMP_ARRAY_IDX_NONE) {
         print_dbg("Component with id=%d and type_id=%d (start=%d) doesn't exist! not removing.", id, comp->type_id, COMP_TYPE_IDS_START);
@@ -532,11 +570,11 @@ void ECS_remove_comp(int id, Comp *comp) {
 
     int comp_count = array_length(comp_arr->comps);
 
-    int last_idx = comp_count - 1;
+    comp_idx_t last_idx = (comp_idx_t)(comp_count - 1);
     Comp *temp = comp_arr->comps[idx];
     comp_arr->comps[idx] = comp_arr->comps[last_idx];
     comp_arr->comps[last_idx] = temp;
-    comp_arr->id_to_idx[id] = 0;
+    comp_arr->id_to_idx[id] = COMP_ARRAY_IDX_NONE;
     for (int i = 0; i < comp_arr->_id_to_idx_len; i++) {
         if (comp_arr->id_to_idx[i] == last_idx) {
             comp_arr->id_to_idx[i] = idx;
@@ -544,13 +582,19 @@ void ECS_remove_comp(int id, Comp *comp) {
         }
     }
 
-    array_remove(comp_arr->comps, comp_count - 1);
+    array_remove(comp_arr->comps, last_idx);
 }
 
 void ECS_remove_id(int id) {
     for (int i = COMP_TYPE_IDS_START + 1; i < COMP_TYPE_IDS_END; i++) {
         ECS_remove_comp(id, CompArray_get(_ecs->comp_arrays[type_id_to_ecs_idx(i)], id));
     }
+
+    reclaim_id(id);
+}
+
+void reclaim_id(int id) {
+    RB_push(int, _free_ids, id);
 }
 
 // #END
