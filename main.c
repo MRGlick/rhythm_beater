@@ -1,5 +1,6 @@
 
 #pragma GCC diagnostic ignored "-Wsign-conversion"
+#pragma GCC diagnostic ignored "-Wfloat-conversion"
 
 #define SDL_MAIN_HANDLED
 
@@ -29,49 +30,9 @@ typedef struct Node {
 
 typedef struct Comp {
     int type_id;
-    void (*render)(struct Node *, double);
-    void (*tick)(struct Node *, double);
+    void (*render)(struct Comp *, int, double, GPU_Target *);
+    void (*tick)(struct Comp *, int, double);
 } Comp;
-
-// Can't pull out Comp##name into a macro because the language server is too weak for my shit
-
-#define DEFINE_COMP(name, ...) \
-    const int Comp##name##_type_id = __COUNTER__; \
-    typedef struct { \
-        Comp comp; \
-        __VA_ARGS__ \
-    } Comp##name; \
-    typedef void name;
-    // ^^ for autocomplete
-
-#define COMP_INIT(name, comp_name, ...) \
-    void Comp##name##_init(Comp##name *comp_name, __VA_ARGS__)
-
-
-//  Do NOT use __COUNTER__ between COMP_TYPE_IDS_START and COMP_TYPE_IDS_END!!!
-const int COMP_TYPE_IDS_START = __COUNTER__;
-
-DEFINE_COMP(Foo, int x, y, z;)
-
-COMP_INIT(Foo, f, int x, int y, int z) {
-    f->x = x;
-    f->y = y;
-    f->z = z;
-}
-
-DEFINE_COMP(
-    Bar, 
-    int x, y, z;
-)
-
-COMP_INIT(Bar, b, int x, int y, int z) {
-    b->x = x;
-    b->y = y;
-    b->z = z;
-}
-
-const int COMP_TYPE_IDS_END = __COUNTER__;
-
 
 typedef i16 comp_idx_t;
 
@@ -118,6 +79,8 @@ void Node_remove_idx(Node *parent, int idx);
     ((Comp *)({ \
         Comp##type_name *__c = calloc(sizeof(Comp##type_name), 1); \
         __c->comp.type_id = Comp##type_name##_type_id; \
+        __c->comp.tick = Comp##type_name##_tick; \
+        __c->comp.render = Comp##type_name##_render; \
         Comp##type_name##_init(__c, __VA_ARGS__); \
         __c; \
     }))
@@ -170,9 +133,17 @@ void CompArray_add(CompArray *comp_arr, Comp *comp, int id);
 
 void CompArray_free(CompArray *comp_arr);
 
+#define COMP_ARRAY_SPARSE_SIZE 100
+
+#define COMP_ARRAY_IDX_NONE -1
+
 CompArray *_CompArray_new(int type_id);
 
 #define CompArray_new(comp_type) _CompArray_new(comp_type##_type_id)
+
+#define ID_START 1
+
+int _max_id = 0; // if an id is equal to or bigger than _max_id, it is invalid.
 
 int get_next_id(void);
 
@@ -189,6 +160,65 @@ void render(double delta);
 void tick(double delta);
 
 void start(void);
+
+// #FUNCS END
+
+// #COMPDEF
+
+// Can't pull out Comp##name into a macro because the language server is too weak for my shit
+
+#define FUNC_OR_NULL __attribute__((weak))
+
+
+#define COMP_INIT(name, comp_name, ...) \
+    void Comp##name##_init(Comp##name *comp_name, __VA_ARGS__)
+
+#define COMP_TICK(name) \
+    void Comp##name##_tick(Comp *comp, int id, double delta)
+
+#define COMP_RENDER(name) \
+    void Comp##name##_render(Comp *comp, int id, double delta, GPU_Target *target)
+
+    #define DEFINE_COMP(name, ...) \
+    const int Comp##name##_type_id = __COUNTER__; \
+    typedef struct { \
+        Comp comp; \
+        __VA_ARGS__; \
+    } Comp##name; \
+    typedef void name; \
+    COMP_TICK(name) FUNC_OR_NULL; \
+    COMP_RENDER(name) FUNC_OR_NULL; 
+    // ^^ for autocomplete
+
+//  Do NOT use __COUNTER__ between COMP_TYPE_IDS_START and COMP_TYPE_IDS_END!!!
+const int COMP_TYPE_IDS_START = __COUNTER__;
+
+DEFINE_COMP(Foo, int x, y, z; double xvel; double xpos;)
+
+COMP_RENDER(Foo) {
+    CompFoo *f = (CompFoo *)comp;
+    GPU_Rect rect = GPU_MakeRect(f->xpos, 200, 200, 200);
+    GPU_RectangleFilled2(target, rect, GPU_MakeColor(255, 0, 255, 255));
+    f->xvel += delta;
+    f->xpos += f->xvel;
+    if (f->xpos > WINDOW_WIDTH) f->xpos = 0;
+}
+
+COMP_INIT(Foo, f, int x, int y, int z) {
+    f->x = x;
+    f->y = y;
+    f->z = z;
+    f->xvel = 0;
+    f->xpos = 0;
+}
+
+const int COMP_TYPE_IDS_END = __COUNTER__;
+
+
+
+
+
+
 
 int main() {
 
@@ -268,31 +298,46 @@ bool is_key_pressed(SDL_Scancode scancode) {
 }
 
 // #TICK
-void tick(UNUSED double delta) {
+void tick(double delta) {
+    for (int i = 0; i < array_length(_ecs->comp_arrays); i++) {
+        CompArray *comp_arr = _ecs->comp_arrays[i];
+        for (comp_idx_t id = ID_START; id < comp_arr->_id_to_idx_len; id++) {
+            if (comp_arr->id_to_idx[id] == COMP_ARRAY_IDX_NONE) continue;
 
+            Comp *comp = CompArray_get(comp_arr, id);
+            if (comp->tick) comp->tick(comp, id, delta);
+        }
+    }
 }
 
 
 // #RENDER
 void render(UNUSED double delta) {
+    for (int i = 0; i < array_length(_ecs->comp_arrays); i++) {
+        CompArray *comp_arr = _ecs->comp_arrays[i];
+        for (comp_idx_t id = ID_START; id < comp_arr->_id_to_idx_len; id++) {
+            if (comp_arr->id_to_idx[id] == COMP_ARRAY_IDX_NONE) continue;
 
+            Comp *comp = CompArray_get(comp_arr, id);
+            if (comp->render) comp->render(comp, id, delta, screen);
+        }
+    }
+
+    GPU_Flip(screen);
+    GPU_Clear(screen);
 }
 
-int _max_id = 0; // if an id is equal to or bigger than _max_id, it is invalid.
 
 int get_next_id(void) {
 
     if (!RB_is_empty(_free_ids)) return RB_pop(int, _free_ids);
 
-    static comp_idx_t _id = 1; // reserve 0
+    static comp_idx_t _id = ID_START; // reserve 0
     int new_id = _id++;
     _max_id = new_id + 1;
     return new_id;
 }
 
-#define COMP_ARRAY_SPARSE_SIZE 100
-
-#define COMP_ARRAY_IDX_NONE -1
 
 CompArray *_CompArray_new(int type_id) {
     CompArray *comp_arr = malloc(sizeof(CompArray));
@@ -348,8 +393,6 @@ void CompArray_expand_to_fit_id(CompArray *comp_array, int id) {
 
 Node *_Node_new(Comp **comps, int count) {
 
-    print_dbg("Count: %d", count);
-
     Node *node = malloc(sizeof(Node));
     *node = (Node) {
         .children = array(Node *, 2),
@@ -383,7 +426,7 @@ int Node_child_count(Node *node) {
 }
 
 void ECS_init(void) {
-    _ecs = calloc(sizeof(ECS), 1);
+    _ecs = malloc(sizeof(ECS));
     _ecs->comp_arrays = array(CompArray *, 2);
 
     for (int type_id = COMP_TYPE_IDS_START + 1; type_id < COMP_TYPE_IDS_END; type_id++) {
@@ -403,33 +446,9 @@ void ECS_add_comp_arr(CompArray *comp_arr) {
 void start() {
     _root = Node_new_empty();
 
-    Node *node = Node_new(Comp_new(Foo, 1, 2, 3), Comp_new(Bar, 2, 4, 6));
+    Node *node = Node_new(Comp_new(Foo, 1, 2, 3));
 
     Node_add_child(_root, node);
-
-    Node_free(node);
-
-    node = Node_new(Comp_new(Foo, 1, 2, 3), Comp_new(Bar, 2, 4, 6));
-
-    Node_add_child(_root, node);
-
-    Node_free(node);
-
-    node = Node_new(Comp_new(Foo, 1, 2, 3), Comp_new(Bar, 2, 4, 6));
-
-    Node_add_child(_root, node);
-
-    Node_free(node);
-
-    node = Node_new(Comp_new(Foo, 1, 2, 3), Comp_new(Bar, 2, 4, 6));
-
-    Node_add_child(_root, node);
-
-    Node_free(node);
-
-    CompArray_print_dbg(_ecs->comp_arrays[0]);
-
-    print_dbg("yay!");
     
 }
 

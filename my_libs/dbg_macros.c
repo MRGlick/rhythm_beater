@@ -12,5 +12,5 @@
 #define err_crash(...) ({fprintf(stderr, "ERROR!\n\t"__VA_ARGS__); printf("\n\t At line: %d \n", __LINE__); getchar(); *(char *)0 = 0; })
  
 
-#define assert(cond) if (!(cond)) err_exit("Assertion failed: "#cond)
+#define assert(cond) if (!(cond)) err_crash("Assertion failed: "#cond)
 
